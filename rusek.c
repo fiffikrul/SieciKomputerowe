@@ -11,10 +11,38 @@
 #include <sys/epoll.h>
 #include <netdb.h>
 #include <errno.h>
+#include <pthread.h>
 
 #define MAXEVENTS 64
 
+int test_ile_graczy = 0;
+
+char test[48];
+
+int gracze[MAXEVENTS];
+int id[MAXEVENTS];
+char ostatni_ruch[MAXEVENTS];
+
 static int socket_fd, epoll_fd;
+struct epoll_event event, *events;
+
+void *licz_sekundy( void *ptr )
+	{
+		while(1)
+		{
+			sleep(1);
+			for(int i=0;i<MAXEVENTS;i++)
+			{
+				if(id[i]!=0)
+				{
+					printf("\n\n%d\n\n",i);
+					write(id[i],&ostatni_ruch[i],sizeof(ostatni_ruch));
+				}
+			}
+			printf("minela sekunda\n");
+		}
+	}
+
 
 static void socket_create_bind_local()
 {
@@ -94,10 +122,29 @@ void accept_and_add_new()
 			abort();
 		}
 		in_len = sizeof(in_addr);
+
+	//-----------------------------------------------------------------------------------------------------------------dodaje poczatkowe dane gracze--
+		for(int i=0;i<MAXEVENTS;i++)
+		{
+			if(gracze[i]==0)
+			{
+				gracze[i] = 1;
+				id[i] = infd;
+				ostatni_ruch[i] = i;
+				test[0] = i;
+				printf("Gracz %d o fd %d, ostatni ruch: %c\n",i,infd,ostatni_ruch[i]);
+				printf("\n%d to jest id[i]",i);
+				write(id[i],test,sizeof(test));
+				break;
+			}
+		}
 	}
 
 	if (errno != EAGAIN && errno != EWOULDBLOCK)
 		perror("accept");
+
+
+
 	/* else
 	 *
 	 * We hae processed all incomming connectioins
@@ -109,6 +156,17 @@ void process_new_data(int fd)
 {
 	ssize_t count;
 	char buf[512];
+	int id_gracza;
+
+	for(int i=0;i<64;i++)
+	{
+		if(id[i]==fd)
+		{
+			id_gracza = i;
+			printf("Id gracza: %d\n",i);
+			break;
+		}
+	}
 
 	while ((count = read(fd, buf, sizeof(buf) - 1))) {
 		if (count == -1) {
@@ -123,17 +181,52 @@ void process_new_data(int fd)
 		/* Write buffer to stdout */
 		buf[count] = '\0';
 		printf("%s \n", buf);
+		//ostatni_ruch[id_gracza] = fd;
+		ostatni_ruch[id_gracza] = buf[0];
+		printf("Gracz tab = %d ",id_gracza);
+		printf("Zmieniono ostatni ruch, wynosi on %c\n",ostatni_ruch[id_gracza]);////////////////////////////////////////////////////////////////////////////////////////////////
 	}
 	
 	printf("Close connection on descriptor: %d\n", fd);
 	close(fd);
 }
 
+void *czekaj_na_cos( void *ptr )
+{
+	while(1)
+	{
+		int n, i;
+		n = epoll_wait(epoll_fd, events, MAXEVENTS, -1);
+		for (i = 0; i < n; i++)
+		{
+				if (events[i].events & EPOLLERR || events[i].events & EPOLLHUP ||
+				    !(events[i].events & EPOLLIN)) {
+					/* An error on this fd or socket not ready */
+					perror("epoll error");
+					close(events[i].data.fd);
+				} else if (events[i].data.fd == socket_fd) {
+					/* New incoming connection */
+					accept_and_add_new();
+				} else {
+					/* Data incoming on fd */
+					process_new_data(events[i].data.fd);
+				}
+		}
+	}
+}
+
 int main()
 {
-	struct epoll_event event, *events;
 
 	socket_create_bind_local();
+
+	//--zerowanie tablic
+	for (int i=0;i<64;i++)
+	{
+		gracze[i] = 0;
+		id[i] = 0;
+		ostatni_ruch[i] = '0';
+	}
 
 	if (make_socket_non_blocking(socket_fd) == -1)
 		exit(1);
@@ -161,24 +254,26 @@ int main()
 
 	events = calloc(MAXEVENTS, sizeof(event));
 
-	while(1) {
-		int n, i;
-		n = epoll_wait(epoll_fd, events, MAXEVENTS, -1);
-		for (i = 0; i < n; i++) {
-			if (events[i].events & EPOLLERR || events[i].events & EPOLLHUP ||
-			    !(events[i].events & EPOLLIN)) {
-				/* An error on this fd or socket not ready */
-				perror("epoll error");
-				close(events[i].data.fd);
-			} else if (events[i].data.fd == socket_fd) {
-				/* New incoming connection */
-				accept_and_add_new();
-			} else {
-				/* Data incoming on fd */
-				process_new_data(events[i].data.fd);
-			}
-		}
-	}
+	pthread_t t1,t2;
+	int  iret1,iret2;
+	iret1 = pthread_create( &t1, NULL, licz_sekundy, (void*) "dzoala1");
+	if(iret1)
+	     {
+	         fprintf(stderr,"Error - pthread_create() return code: %d\n",iret1);
+	         exit(EXIT_FAILURE);
+	     }
+
+	iret2 = pthread_create( &t2, NULL, czekaj_na_cos, (void*) "dzoala1");
+	if(iret2)
+	     {
+	         fprintf(stderr,"Error - pthread_create() return code: %d\n",iret2);
+	         exit(EXIT_FAILURE);
+	     }
+
+	pthread_join(t2,NULL);
+
+
+	pthread_join(t1,NULL);
 
 	free(events);
 	close(socket_fd);
