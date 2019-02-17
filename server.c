@@ -28,8 +28,7 @@ int player_counter = 0;
 struct Player{
 	pthread_t read_thread, write_thread;
 	int read_thread_ret, write_thread_ret;
-	char read_buf[20], write_buf[20];
-	bool in_room;
+	bool in_room, ready;
 	int my_fd;
 	int room_number, player_number;
 };
@@ -119,30 +118,31 @@ void sleep_ms(int miliseconds){
 void *read_client(void* my_player){
 	ssize_t count;
 	struct Player *me = (struct Player*)my_player;
+	char read_buf[200];
 	int room_nr = -1;
 
-	while ((count = read(me->my_fd, me->read_buf, sizeof(me->read_buf) - 1)) > 0){
+	while ((count = read(me->my_fd, read_buf, sizeof(read_buf) - 1)) > 0){
 		//printf("czyta\n");
-		me->read_buf[count] = '\0';
+		read_buf[count] = '\0';
 		if (me->in_room){
 			if (rooms[room_nr].playing){
 				if (count == 3){
-					rooms[room_nr].food[0] = me->read_buf[1] - '0';
-					rooms[room_nr].food[1] = me->read_buf[2] - '0';
+					rooms[room_nr].food[0] = read_buf[1] - '0';
+					rooms[room_nr].food[1] = read_buf[2] - '0';
 				}
 				else{
 					rooms[room_nr].food[0] = -1;
 					rooms[room_nr].food[1] = -1;
 				}
-				rooms[room_nr].move[me->player_number] = me->read_buf[0];
+				rooms[room_nr].move[me->player_number] = read_buf[0];
 			}
 			else{
-				if (memcmp(me->read_buf, "/czas ", 6) == 0){
+				if (memcmp(read_buf, "/czas ", 6) == 0){
 					pthread_mutex_lock(&rooms[room_nr].settings_lock);
 					printf("time\n");
 					char time_string[5];
 					for (int i = 6; i < count; i++){
-						time_string[i - 6] = me->read_buf[i];
+						time_string[i - 6] = read_buf[i];
 					}
 					rooms[room_nr].game_time = atoi(time_string);
 					if (rooms[room_nr].game_time < 1)
@@ -152,12 +152,12 @@ void *read_client(void* my_player){
 					pthread_mutex_unlock(&rooms[room_nr].settings_lock);
 				}
 
-				if (memcmp(me->read_buf, "/rozmiar ", 9) == 0){
+				if (memcmp(read_buf, "/rozmiar ", 9) == 0){
 					pthread_mutex_lock(&rooms[room_nr].settings_lock);
 					printf("size\n");
 					char size_string[5];
 					for (int i = 9; i < count; i++){
-						size_string[i - 9] = me->read_buf[i];
+						size_string[i - 9] = read_buf[i];
 					}
 					rooms[room_nr].game_size = atoi(size_string);
 					if (rooms[room_nr].game_size < 9)
@@ -166,26 +166,42 @@ void *read_client(void* my_player){
 						rooms[room_nr].game_size = 30;
 					pthread_mutex_unlock(&rooms[room_nr].settings_lock);
 				}
-				if (memcmp(me->read_buf, "/ready", 6) == 0){
+				if (memcmp(read_buf, "/ready", 6) == 0){
 					pthread_mutex_lock(&rooms[room_nr].players_lock);
 					printf("ready\n");
+					me->ready = true;
 					rooms[room_nr].number_of_ready++;
 					if (rooms[room_nr].number_of_ready == rooms[room_nr].number_of_players && rooms[room_nr].number_of_players >= 2){
 						rooms[room_nr].ready_to_go = true;
 					}
 					pthread_mutex_unlock(&rooms[room_nr].players_lock);
 				}
-				if (memcmp(me->read_buf, "!ready", 6) == 0){
+				if (memcmp(read_buf, "!ready", 6) == 0){
 					pthread_mutex_lock(&rooms[room_nr].players_lock);
 					printf("not ready\n");
+					me->ready = false;
 					rooms[room_nr].number_of_ready--;
 					rooms[room_nr].ready_to_go = false;
+					pthread_mutex_unlock(&rooms[room_nr].players_lock);
+				}
+				if (memcmp(read_buf, "/exit", 6) == 0){
+					pthread_mutex_lock(&rooms[room_nr].players_lock);
+					printf("lobby\n");
+					if (me->ready){
+						rooms[room_nr].number_of_ready--;
+					}
+					me->in_room = false;
+					me->ready = false;
+					rooms[room_nr].number_of_players--;
+					if (rooms[room_nr].number_of_players < 2){
+						rooms[room_nr].ready_to_go = false;
+					}
 					pthread_mutex_unlock(&rooms[room_nr].players_lock);
 				}
 			}
 		}
 		else{
-			int possible_number = me->read_buf[0] - '0';
+			int possible_number = read_buf[0] - '0';
 			if (possible_number <= 4 && possible_number >= 1){
 				pthread_mutex_lock(&rooms[possible_number - 1].players_lock);
 				for (int i = 0; i < MAXPLAYERS; i++){
@@ -228,44 +244,69 @@ void *read_client(void* my_player){
 void *write_client(void *my_player){
 	struct Player *me = (struct Player *)my_player;
 	ssize_t count;
+	char write_buf[200];
+	int send_size;
 	int room_nr;
+	int countdown = 10;
+	char number[2];
 
 	do{
 		sleep_ms(1000);
-		//printf("pisze dla %d\n", me->my_fd);
 		if (me->in_room){
+			printf("%d in room %d\n", me->my_fd, me->room_number);
 			room_nr = me->room_number - 1;
+			printf("room: %d\n", room_nr);
 			if (rooms[room_nr].playing){
 				for (int i = 0; i < 4; i++){
-					me->write_buf[i] = rooms[room_nr].move[i];
+					printf("room: %d move %d: %c", room_nr + 1, i + 1, rooms[room_nr].move[i]);
+					write_buf[i] = rooms[room_nr].move[i];
 				}
 				if (rooms[room_nr].food[0] != -1){
-					me->write_buf[4] = rooms[room_nr].food[0] + '0';
-					me->write_buf[5] = rooms[room_nr].food[1] + '0';
-					me->write_buf[6] = '\0';
+					write_buf[4] = rooms[room_nr].food[0] + '0';
+					write_buf[5] = rooms[room_nr].food[1] + '0';
+					write_buf[6] = '\0';
+					send_size = 7;
 				}
 				else{
-					me->write_buf[4] = '\0';
+					write_buf[4] = '\0';
+					send_size = 5;
 				}
-				//sleep_ms(250); //co jaki czas ma wyslac ruchy
 			}
-			else{
-
+			else if (rooms[room_nr].ready_to_go){
+				sprintf(number, "%d", countdown);
+				if (countdown == 10){
+					write_buf[0] = number[0];
+					write_buf[1] = number[1];
+					write_buf[2] = '\0';
+					send_size = 3;
+				}
+				else{
+					write_buf[0] = number[0];
+					write_buf[1] = '\0';
+					send_size = 2;
+				}
+				countdown--;
+				if (!rooms[room_nr].ready_to_go)
+					countdown = 10;
+				if (countdown == -1)
+					rooms[room_nr].playing = true;
 			}
 		}
 		else{
-			//printf("Wysyla dane o pokojach\n"); 
+			printf("Out of a room\n"); 
 			for(int i = 0; i < 4; i++){
 				pthread_mutex_lock(&rooms[i].players_lock);
-				me->write_buf[0 + i] = rooms[i].number_of_players;
+				write_buf[2 * i] = rooms[i].number_of_players + '0';
 				if (rooms[i].playing)
-					me->write_buf[1 + i] = 1;
+					write_buf[2 * i + 1] = '1';
 				else
-					me->write_buf[1 + i] = 0;
+					write_buf[2 * i + 1] = '0';
 				pthread_mutex_unlock(&rooms[i].players_lock);
 			}
+			write_buf[8] = '\0';
+			send_size = 9;
 		}
-	} while ((count = write(me->my_fd, me->write_buf, sizeof(me->write_buf))) > 0);
+	} while ((count = write(me->my_fd, write_buf, send_size)) > 0);
 	if (count == -1){
 		perror("write");
 		return &me->my_fd;
@@ -281,16 +322,17 @@ void new_client(int fd){
 	//każdy gracz otrzymuje wątek czytania i pisania
 	new_player = malloc(sizeof(struct Player));
 	new_player->in_room = false;
+	new_player->ready = false;
 	new_player->room_number = 0;
 	new_player->player_number = 0;
 	new_player->my_fd = fd;
 	player_counter++;
 
-	/*new_player->write_thread_ret = pthread_create(&new_player->write_thread, NULL, write_client, (void *)new_player);
+	new_player->write_thread_ret = pthread_create(&new_player->write_thread, NULL, write_client, (void *)new_player);
 	if (new_player->write_thread_ret){
 		fprintf(stderr, "Error - pthread_create() return code: %d\n", new_player->write_thread_ret);
 		exit(EXIT_FAILURE);
-	}*/
+	}
 	new_player->read_thread_ret = pthread_create(&new_player->read_thread, NULL, read_client, (void *)new_player);
 	if (new_player->read_thread_ret){
 		fprintf(stderr, "Error - pthread_create() return code: %d\n", new_player->read_thread_ret);
