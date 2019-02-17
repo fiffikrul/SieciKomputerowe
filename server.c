@@ -22,7 +22,6 @@
 static int socket_fd, epoll_fd;
 struct epoll_event event, *events;
 char ip_string[16], port_string[6];
-int player_counter = 0;
 
 //PLAYER STRUCT
 struct Player{
@@ -46,6 +45,7 @@ struct Room{
 	bool playing, ready_to_go;
 	int number_of_players, number_of_ready;
 	int player_fd[MAXPLAYERS];
+	int countdown;
 };
 
 struct Room rooms[4];
@@ -122,7 +122,6 @@ void *read_client(void* my_player){
 	int room_nr = -1;
 
 	while ((count = read(me->my_fd, read_buf, sizeof(read_buf) - 1)) > 0){
-		//printf("czyta\n");
 		read_buf[count] = '\0';
 		if (me->in_room){
 			if (rooms[room_nr].playing){
@@ -189,11 +188,11 @@ void *read_client(void* my_player){
 					printf("lobby\n");
 					if (me->ready){
 						rooms[room_nr].number_of_ready--;
+						me->ready = false;
 					}
 					me->in_room = false;
-					me->ready = false;
 					rooms[room_nr].number_of_players--;
-					if (rooms[room_nr].number_of_players < 2){
+					if (rooms[room_nr].number_of_players < 2 && rooms[room_nr].ready_to_go){
 						rooms[room_nr].ready_to_go = false;
 					}
 					pthread_mutex_unlock(&rooms[room_nr].players_lock);
@@ -204,18 +203,21 @@ void *read_client(void* my_player){
 			int possible_number = read_buf[0] - '0';
 			if (possible_number <= 4 && possible_number >= 1){
 				pthread_mutex_lock(&rooms[possible_number - 1].players_lock);
-				for (int i = 0; i < MAXPLAYERS; i++){
-					printf("Sprawdza %d slot w %d pokoju\n",i + 1, possible_number);
-					if (rooms[possible_number - 1].player_fd[i] == 0){
-						room_nr = possible_number - 1;
-						rooms[room_nr].number_of_players++;
-						me->room_number = possible_number;
-						me->in_room = true;
-						me->player_number = i;
-						rooms[room_nr].player_fd[i] = me->my_fd;
-						printf("Ma numer %d i id %d\nTeraz w tym pokoju jest %d graczy\n", me->player_number, rooms[room_nr].player_fd[i], rooms[room_nr].number_of_players);
-						break;
+				if (!rooms[possible_number - 1].playing && rooms[possible_number - 1].number_of_players < MAXPLAYERS){
+					room_nr = possible_number - 1;
+					if (rooms[room_nr].ready_to_go)
+						rooms[room_nr].ready_to_go = false;
+					rooms[room_nr].number_of_players++;
+					me->room_number = room_nr;
+					me->in_room = true;
+					for (int i = 0; i < MAXPLAYERS; i++){
+						if (rooms[room_nr].player_fd[i] == -1){
+							me->player_number = i;
+							rooms[room_nr].player_fd[i] = me->my_fd;
+							break;
+						}
 					}
+					printf("Ma numer %d i id %d\nTeraz w tym pokoju jest %d graczy\n", me->player_number, me->my_fd, rooms[room_nr].number_of_players);
 				}
 				if(room_nr == -1)
 					printf("Nie bylo slota\n");
@@ -228,14 +230,16 @@ void *read_client(void* my_player){
 		return &me->my_fd;
 	}
 	printf("Closed connection on descriptor: %d\n", me->my_fd);
-	pthread_mutex_lock(&rooms[room_nr].players_lock);
-	for (int i = 0; i < MAXPLAYERS; i++){
-		if (rooms[room_nr].player_fd[i] == me->my_fd)
-			rooms[room_nr].player_fd[i] = 0;
+	if (me->in_room){
+		pthread_mutex_lock(&rooms[room_nr].players_lock);
+		for (int i = 0; i < MAXPLAYERS; i++){
+			if (rooms[room_nr].player_fd[i] == me->my_fd)
+				rooms[room_nr].player_fd[i] = -1;
+		}
+		rooms[room_nr].number_of_ready--;
+		rooms[room_nr].number_of_players--;
+		pthread_mutex_unlock(&rooms[room_nr].players_lock);
 	}
-	rooms[room_nr].number_of_ready--;
-	rooms[room_nr].number_of_players--;
-	pthread_mutex_unlock(&rooms[room_nr].players_lock);
 	close(me->my_fd);
 	free(my_player);
 	return NULL;
@@ -247,18 +251,15 @@ void *write_client(void *my_player){
 	char write_buf[200];
 	int send_size;
 	int room_nr;
-	int countdown = 10;
-	char number[2];
+	char number_string[2], time_string[2], size_string[2];
+	int countdown = rooms[room_nr].countdown;
 
 	do{
 		sleep_ms(1000);
 		if (me->in_room){
-			printf("%d in room %d\n", me->my_fd, me->room_number);
-			room_nr = me->room_number - 1;
-			printf("room: %d\n", room_nr);
+			room_nr = me->room_number;
 			if (rooms[room_nr].playing){
 				for (int i = 0; i < 4; i++){
-					printf("room: %d move %d: %c", room_nr + 1, i + 1, rooms[room_nr].move[i]);
 					write_buf[i] = rooms[room_nr].move[i];
 				}
 				if (rooms[room_nr].food[0] != -1){
@@ -273,27 +274,43 @@ void *write_client(void *my_player){
 				}
 			}
 			else if (rooms[room_nr].ready_to_go){
-				sprintf(number, "%d", countdown);
+				sprintf(number_string, "%d", countdown);
 				if (countdown == 10){
-					write_buf[0] = number[0];
-					write_buf[1] = number[1];
+					write_buf[0] = number_string[0];
+					write_buf[1] = number_string[1];
 					write_buf[2] = '\0';
 					send_size = 3;
 				}
 				else{
-					write_buf[0] = number[0];
+					write_buf[0] = number_string[0];
 					write_buf[1] = '\0';
 					send_size = 2;
 				}
 				countdown--;
-				if (!rooms[room_nr].ready_to_go)
-					countdown = 10;
-				if (countdown == -1)
+				if (countdown == -1){
 					rooms[room_nr].playing = true;
+					rooms[room_nr].ready_to_go = false;
+				}
+			}
+			else{
+				countdown = rooms[room_nr].countdown;
+				sprintf(time_string, "%d", rooms[room_nr].game_time);
+				sprintf(size_string, "%d", rooms[room_nr].game_size);
+				for (int i = 0; i < 2; i++){
+					write_buf[i] = time_string[i];
+					write_buf[i + 2] = size_string[i];
+				}
+				if (rooms[room_nr].game_time < 10)
+					write_buf[1] = 'n';
+				if (rooms[room_nr].game_size < 10)
+					write_buf[3] = 'n';
+				write_buf[4] = rooms[room_nr].number_of_players + '0';
+				write_buf[5] = rooms[room_nr].number_of_ready + '0';
+				write_buf[6] = '\0';
+				send_size = 7;
 			}
 		}
 		else{
-			printf("Out of a room\n"); 
 			for(int i = 0; i < 4; i++){
 				pthread_mutex_lock(&rooms[i].players_lock);
 				write_buf[2 * i] = rooms[i].number_of_players + '0';
@@ -323,10 +340,9 @@ void new_client(int fd){
 	new_player = malloc(sizeof(struct Player));
 	new_player->in_room = false;
 	new_player->ready = false;
-	new_player->room_number = 0;
-	new_player->player_number = 0;
+	new_player->room_number = -1;
+	new_player->player_number = -1;
 	new_player->my_fd = fd;
-	player_counter++;
 
 	new_player->write_thread_ret = pthread_create(&new_player->write_thread, NULL, write_client, (void *)new_player);
 	if (new_player->write_thread_ret){
@@ -455,11 +471,12 @@ void create_room(struct Room *room){
 	room->ready_to_go = false;
 	room->number_of_players = 0;
 	room->number_of_ready = 0;
+	room->countdown = 10;
 	pthread_mutex_init(&room->settings_lock, NULL);
 	pthread_mutex_init(&room->players_lock, NULL);
 
 	for (int i = 0; i < MAXPLAYERS; i++){
-		room->player_fd[i] = 0;
+		room->player_fd[i] = -1;
 	}
 	/*room->control_thread_ret = pthread_create(&room->control_thread, NULL, control_client, (void *)room);
 	if (room->control_thread_ret){
