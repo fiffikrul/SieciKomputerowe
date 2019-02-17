@@ -37,6 +37,8 @@ struct Room{
 	pthread_t control_thread, timer_thread;
 	pthread_mutex_t settings_lock;
 	pthread_mutex_t players_lock;
+	pthread_cond_t synchronization;
+	pthread_mutex_t synch_lock;
 	int control_thread_ret, timer_thread_ret;
 	int game_time;
 	int game_size;
@@ -46,6 +48,7 @@ struct Room{
 	int number_of_players, number_of_ready;
 	int player_fd[MAXPLAYERS];
 	int countdown;
+	int synchronized;
 };
 
 struct Room rooms[4];
@@ -165,7 +168,7 @@ void *read_client(void* my_player){
 						rooms[room_nr].game_size = 30;
 					pthread_mutex_unlock(&rooms[room_nr].settings_lock);
 				}
-				if (memcmp(read_buf, "/ready", 6) == 0){
+				if (memcmp(read_buf, "/ready", 6) == 0 && !me->ready){
 					pthread_mutex_lock(&rooms[room_nr].players_lock);
 					printf("ready\n");
 					me->ready = true;
@@ -175,7 +178,7 @@ void *read_client(void* my_player){
 					}
 					pthread_mutex_unlock(&rooms[room_nr].players_lock);
 				}
-				if (memcmp(read_buf, "!ready", 6) == 0){
+				if (memcmp(read_buf, "!ready", 6) == 0 && me->ready){
 					pthread_mutex_lock(&rooms[room_nr].players_lock);
 					printf("not ready\n");
 					me->ready = false;
@@ -236,7 +239,10 @@ void *read_client(void* my_player){
 			if (rooms[room_nr].player_fd[i] == me->my_fd)
 				rooms[room_nr].player_fd[i] = -1;
 		}
-		rooms[room_nr].number_of_ready--;
+		if (me->ready){
+			rooms[room_nr].ready_to_go = false;
+			rooms[room_nr].number_of_ready--;
+		}
 		rooms[room_nr].number_of_players--;
 		pthread_mutex_unlock(&rooms[room_nr].players_lock);
 	}
@@ -259,6 +265,16 @@ void *write_client(void *my_player){
 		if (me->in_room){
 			room_nr = me->room_number;
 			if (rooms[room_nr].playing){
+				/*pthread_mutex_lock(&rooms[room_nr].synch_lock);
+				rooms[room_nr].synchronized++;
+				if (rooms[room_nr].synchronized == rooms[room_nr].number_of_ready){
+					pthread_cond_broadcast(&rooms[room_nr].synchronization);
+				}
+				else{
+					pthread_cond_wait(&rooms[room_nr].synchronization, &rooms[room_nr].synch_lock);
+				}
+				pthread_mutex_unlock(&rooms[room_nr].synch_lock);*/
+
 				for (int i = 0; i < 4; i++){
 					write_buf[i] = rooms[room_nr].move[i];
 				}
@@ -472,6 +488,7 @@ void create_room(struct Room *room){
 	room->number_of_players = 0;
 	room->number_of_ready = 0;
 	room->countdown = 10;
+	room->synchronized = 0;
 	pthread_mutex_init(&room->settings_lock, NULL);
 	pthread_mutex_init(&room->players_lock, NULL);
 
