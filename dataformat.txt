@@ -5,11 +5,11 @@ Dane wysyłane z serwera:
 			np. 21000000 - czyli w pierwszym pokoju gra 2 graczy, pozostałe puste i nie grają
 	Po wejściu do pokoju:
 		serwer wysyła informacje o pokoju:
-			2char na czas rozgrywki, 2char na rozmiar planszy, 1char l. graczy, 1char l. gotowych graczy
+		1char id gracza, 2char czas rozgrywki, 2char rozmiar planszy, 1char l. graczy, 1char l. gotowych graczy
 		gdy wszyscy gracze w pokoju gotowi:
-			wysyła czas odliczania: 10, 9, 8, 7...
+		wysyła czas odliczania: 10, 9, 8, 7...
 		jeśli odliczanie się anuluje (np. wyjdzie ktoś i za mało graczy, lub ktoś anuluje gotowość):
-			wraca do "serwer wysyła informacje o pokoju"
+		wraca do "serwer wysyła informacje o pokoju"
 	Po starcie gry:
 		4char ruchu, 2char jedzenie jeśli nowe (chciałbym to zmienić, żeby po stronie serwera toczyła się gra, ale nie wiem czy dam radę to zmienić)
 Dane odbierane przez serwer:

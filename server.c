@@ -313,17 +313,18 @@ void *write_client(void *my_player){
 				sprintf(time_string, "%d", rooms[room_nr].game_time);
 				sprintf(size_string, "%d", rooms[room_nr].game_size);
 				for (int i = 0; i < 2; i++){
-					write_buf[i] = time_string[i];
-					write_buf[i + 2] = size_string[i];
+					write_buf[i + 1] = time_string[i];
+					write_buf[i + 3] = size_string[i];
 				}
 				if (rooms[room_nr].game_time < 10)
-					write_buf[1] = 'n';
+					write_buf[2] = 'n';
 				if (rooms[room_nr].game_size < 10)
-					write_buf[3] = 'n';
-				write_buf[4] = rooms[room_nr].number_of_players + '0';
-				write_buf[5] = rooms[room_nr].number_of_ready + '0';
-				write_buf[6] = '\0';
-				send_size = 7;
+					write_buf[4] = 'n';
+				write_buf[0] = me->player_number + '0';
+				write_buf[5] = rooms[room_nr].number_of_players + '0';
+				write_buf[6] = rooms[room_nr].number_of_ready + '0';
+				write_buf[7] = '\0';
+				send_size = 8;
 			}
 		}
 		else{
