@@ -1,7 +1,7 @@
 Dane wysyłane z serwera:
 	Po połączeniu do serwera:
 		serwer wysyła informacje o pokojach:
-			2 char na każdy pokój: l. graczy w pokoju 1 - czy pokój 1 gra (1 lub 0) - ...
+			2 char na każdy pokój: 1 - l. graczy w pokoju, 1 - czy pokój gra (1/0) - ...
 			np. 21000000 - czyli w pierwszym pokoju gra 2 graczy, pozostałe puste i nie grają
 	Po wejściu do pokoju:
 		serwer wysyła informacje o pokoju:
@@ -11,7 +11,9 @@ Dane wysyłane z serwera:
 		jeśli odliczanie się anuluje (np. wyjdzie ktoś i za mało graczy, lub ktoś anuluje gotowość):
 		wraca do "serwer wysyła informacje o pokoju"
 	Po starcie gry:
-		4char ruchu, 2char jedzenie jeśli nowe (chciałbym to zmienić, żeby po stronie serwera toczyła się gra, ale nie wiem czy dam radę to zmienić)
+		4char ruchu, 2char jedzenie jeśli nowe
+		jeśli gracz się rozłączy i gra może być kontynuowana to serwer wysyła 'n' zamiast jego ruchu (klient go usuwa)
+		gdy gra się zakończy serwer wysyła 'e'
 Dane odbierane przez serwer:
 	Po połączeniu do serwera:
 		1char z numerem pokoju
